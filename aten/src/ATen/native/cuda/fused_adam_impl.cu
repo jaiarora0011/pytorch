@@ -40,7 +40,15 @@ void _fused_adam_cuda_impl_(
         multi_tensor_apply_for_fused_optimizer<4>(
             tensor_lists,
             state_steps,
-            FusedAdamMathFunctor<scalar_t, 4, ADAM_MODE::ORIGINAL, false>(),
+            FusedAdamMathFunctorMP<
+                scalar_t,
+                float,
+                float,
+                BFloat16,
+                BFloat16,
+                4,
+                ADAM_MODE::ORIGINAL,
+                false>(),
             lr_ptr, // unused
             lr,
             beta1,
