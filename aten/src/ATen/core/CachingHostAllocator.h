@@ -75,7 +75,7 @@ struct DurationStat {
 struct HostStats {
   // COUNT: allocations requested by client code. Note that active
   // count can be extracted by looking at current allocations
-  Stat allocation; 
+  Stat allocation;
   // COUNT: number of allocated segments from host memory allocation.
   Stat segment;
 
@@ -681,11 +681,11 @@ struct CachingHostAllocatorInterface : public at::Allocator {
   void resetAccumulatedStats() {
     impl_->resetAccumulatedStats();
   }
-  
+
   void resetPeakStats() {
     impl_->resetPeakStats();
   }
-  
+
   std::unique_ptr<T> impl_;
 };
 

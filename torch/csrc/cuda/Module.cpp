@@ -670,8 +670,8 @@ PyObject* THCPModule_resetPeakMemoryStats(PyObject* _unused, PyObject* arg) {
 PyObject* THCPModule_hostMemoryStats(PyObject* _unused, PyObject* noargs) {
   HANDLE_TH_ERRORS
 
-  using at::HostStats;
   using at::DurationStat;
+  using at::HostStats;
   using c10::Stat;
   using c10::StatArray;
   using c10::StatType;
@@ -696,7 +696,7 @@ PyObject* THCPModule_hostMemoryStats(PyObject* _unused, PyObject* noargs) {
     dict["avg"] = stat.total / stat.count;
     return dict;
   };
-  
+
   const HostStats stats = at::cuda::CachingHostAllocator_getStats();
 
   py::dict result;
@@ -722,13 +722,14 @@ PyObject* THCPModule_resetAccumulatedHostMemoryStats(
   Py_RETURN_NONE;
 }
 
-PyObject* THCPModule_resetPeakHostMemoryStats(PyObject* _unused, PyObject* noargs) {
+PyObject* THCPModule_resetPeakHostMemoryStats(
+    PyObject* _unused,
+    PyObject* noargs) {
   HANDLE_TH_ERRORS
   at::cuda::CachingHostAllocator_resetPeakStats();
   END_HANDLE_TH_ERRORS
   Py_RETURN_NONE;
 }
-
 
 CapturedTraceback* getFromContext(
     const std::shared_ptr<c10::GatheredContext>& x) {
@@ -2021,8 +2022,14 @@ static struct PyMethodDef _THCPModule_methods[] = {
      METH_O,
      nullptr},
     {"_cuda_hostMemoryStats", THCPModule_hostMemoryStats, METH_NOARGS, nullptr},
-    {"_cuda_resetAccumulatedHostMemoryStats", THCPModule_resetAccumulatedHostMemoryStats, METH_NOARGS, nullptr},
-    {"_cuda_resetPeakHostMemoryStats", THCPModule_resetPeakHostMemoryStats, METH_NOARGS, nullptr},
+    {"_cuda_resetAccumulatedHostMemoryStats",
+     THCPModule_resetAccumulatedHostMemoryStats,
+     METH_NOARGS,
+     nullptr},
+    {"_cuda_resetPeakHostMemoryStats",
+     THCPModule_resetPeakHostMemoryStats,
+     METH_NOARGS,
+     nullptr},
     {"_cuda_cudaHostAllocator",
      THCPModule_cudaHostAllocator,
      METH_NOARGS,

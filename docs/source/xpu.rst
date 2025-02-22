@@ -60,6 +60,8 @@ Memory management
     :nosignatures:
 
      empty_cache
+     host_memory_stats
+     host_memory_stats_as_nested_dict
      max_memory_allocated
      max_memory_reserved
      mem_get_info
@@ -67,7 +69,9 @@ Memory management
      memory_reserved
      memory_stats
      memory_stats_as_nested_dict
+     reset_accumulated_host_memory_stats
      reset_accumulated_memory_stats
+     reset_peak_host_memory_stats
      reset_peak_memory_stats
 
 
