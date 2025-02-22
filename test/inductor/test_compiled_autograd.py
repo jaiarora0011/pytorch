@@ -915,7 +915,8 @@ main()
                 inputs=[param, activ],
                 sizes=(),
                 scalars=(),
-                hooks=(),
+                hooks=[],
+                packed_inputs=[],
             )
         finally:
             handle.remove()
@@ -3336,7 +3337,7 @@ TORCH_LIBRARY(test_cudagraphs_cpu_scalar_used_in_cpp_custom_op, m) {
                 graph_code,
                 """\
 class CompiledAutograd0(torch.nn.Module):
-    def forward(self, inputs, sizes, scalars, hooks):
+    def forward(self, inputs, sizes, scalars, hooks, packed_data):
         getitem = inputs[0]
         getitem_1 = inputs[1]
         getitem_2 = inputs[2]
@@ -3511,9 +3512,7 @@ class CompiledAutograd0(torch.nn.Module):
             fn, count=2, compiler_fn=make_compiler_fn(backend="aot_eager")
         )
 
-    @unittest.expectedFailure
     def test_saved_tensor_unpack_hook_ordering(self):
-        # not the correct behaviour, I'm just preventing this from changing silently
         def f(x, y):
             return x * y
 
@@ -3531,8 +3530,6 @@ class CompiledAutograd0(torch.nn.Module):
             return x
 
         def tensor_hook(_):
-            # in eager, tensor_hook is fired before unpack_hook
-            # but in compiled autograd, tensor_hook is lifted whereas unpack_hook is not
             self.assertEqual(unpack_count, 0)
 
         x = torch.ones(4, requires_grad=True)
@@ -3544,21 +3541,63 @@ class CompiledAutograd0(torch.nn.Module):
             self.assertEqual(pack_count, 1)
             self.assertEqual(unpack_count, 0)
             loss = out_test.sum()
-            loss.register_hook(tensor_hook)
+            loss.register_hook(
+                tensor_hook
+            )  # schedueld to fire before any saved activations
             loss.backward()
             self.assertEqual(pack_count, 1)
             self.assertEqual(unpack_count, 1)
 
-    def test_reentrant_checkpointing(self):
-        def fn(x):
-            y = x.sin()
-            z = y.cos()
-            return (y * z).sum()
+    @parametrize("reentrant", (True, False))
+    def test_checkpointing_simple(self, reentrant):
+        def fn():
+            def _fn(x):
+                y = x.sin()
+                z = y.cos()
+                return (y * z).sum()
 
-        inp = torch.rand(10, 10, requires_grad=True)
-        out = torch.utils.checkpoint.checkpoint(fn, inp, use_reentrant=True)
-        with torch._dynamo.compiled_autograd._enable(torch.compile):
+            inp = torch.rand(10, 10, requires_grad=True)
+            out = torch.utils.checkpoint.checkpoint(_fn, inp, use_reentrant=reentrant)
             out.backward()
+            yield inp.grad
+
+        if reentrant:
+            self.check_output_and_recompiles(
+                fn, count=[1, 3], compiler_fn=make_compiler_fn(fullgraph=False)
+            )
+        else:
+            # dynamo issues, just run the CA graph directly for now
+            self.check_output_and_recompiles(
+                fn, count=[1, 0], compiler_fn=lambda gm: gm
+            )
+
+    @unittest.skipIf(not HAS_CUDA, "requires cuda")
+    def test_offloading(self):
+        def fn():
+            def pack(x):
+                return x.cpu()
+
+            def unpack(x):
+                return x.cuda()
+
+            class MyMatMul(torch.autograd.Function):
+                @staticmethod
+                def forward(ctx, x):
+                    ctx.save_for_backward(x)
+                    return torch.matmul(x, x)
+
+                @staticmethod
+                def backward(ctx, grad_out):
+                    (x,) = ctx.saved_tensors
+                    return grad_out * x
+
+            x = torch.randn(5, requires_grad=True).cuda()
+            with torch.autograd.graph.saved_tensors_hooks(pack, unpack):
+                MyMatMul.apply(x).sum().backward()
+
+            yield x.grad
+
+        self.check_output_and_recompiles(fn)
 
     @skipIfWindows(msg="node name demangling inconsistent on windows")
     def test_backward_hook_relative_ordering_partial(self):
@@ -3617,7 +3656,7 @@ class CompiledAutograd0(torch.nn.Module):
 
         self.check_output_and_recompiles(fn)
 
-    def test_sac(self):
+    def test_checkpointing_sac(self):
         # circular import
         from torch.utils.checkpoint import (
             checkpoint,
@@ -3666,7 +3705,9 @@ class CompiledAutograd0(torch.nn.Module):
             yield model.layer4.weight.grad
             yield model.layer4.bias.grad
 
-        self.check_output_and_recompiles(fn)
+        self.check_output_and_recompiles(
+            fn, count=[1, 5], compiler_fn=make_compiler_fn(fullgraph=False)
+        )
 
 
 def load_test_module(name):
@@ -3754,6 +3795,22 @@ known_graph_breaks_tests = {
     "test_deep_reentrant",  # reentrant .backward
     "test_reentrant_priority",  # reentrant .backward
     "test_simple_reentrant",  # reentrant .backward
+    "test_checkpoint_detects_non_determinism",  # unpack hook in skip files
+    "test_checkpoint_valid_reset_on_error",  # unpack hook in skip files
+    "test_checkpointing_non_reentrant_autocast_cpu",  # unpack hook in skip files
+    "test_checkpointing_non_reentrant_autocast_gpu",  # unpack hook in skip files
+    "test_checkpointing_without_reentrant_arbitrary_input_output",  # unpack hook in skip files
+    "test_checkpointing_without_reentrant_correct_grad",  # unpack hook in skip files
+    "test_checkpointing_without_reentrant_custom_function_works",  # unpack hook in skip files
+    "test_checkpointing_without_reentrant_dataparallel",  # _get_device_index in skip files
+    "test_checkpointing_without_reentrant_detached_tensor_use_reentrant_True",  # reentrant .backward
+    "test_checkpointing_without_reentrant_parameter_used_in_an_out",  # unpack hook in skip files
+    "test_checkpointing_without_reentrant_with_context_fn",  # unpack hook in skip files
+    "test_save_on_cpu_and_checkpoint",  # unpack hook in skip files
+    "test_saved_tensor_hooks_custom_error_propagation",  # CustomError
+    "test_access_saved_tensor_twice_without_recomputation_works",  # unpack hook in skip files
+    "test_saved_tensor_hooks_extra_enter_during_bw_no_leak",  # ctx in skip files
+    "test_saved_tensor_hooks_extra_exit_during_bw_no_crash",  # ctx in skip files
 }
 
 test_contexts = {
@@ -3764,9 +3821,7 @@ test_contexts = {
 }
 
 # These groups of tests aren't supported yet
-known_failures_re = re.compile(
-    r"^test_(sparse|profiler|gradcheck|checkpoint|named_tensor)"
-)
+known_failures_re = re.compile(r"^test_(sparse|profiler|gradcheck|named_tensor)")
 
 # Bugs needing investigation:
 skipped_tests = {
@@ -3837,7 +3892,7 @@ known_failing_tests = {
     # IndexError: list index out of range (NB: x.grad = y where both x and y are input tensors)
     "test_grad_nonleaf_register_hook",
     "test_backward_twice_without_saved_values",  # https://github.com/pytorch/pytorch/issues/129938
-    # Category: Dynamo
+    # Category: Dynamo (pass when directly running CA graph)
     "test_accumulate_grad_tensor_reference",  # Out of bounds: frame_state_entry.stride[i] is None
     "test_custom_function_exception",  # torch.no_grad(), torch._dynamo.exc.Unsupported: missing: WITH_EXCEPT_START
     "test_to_sparse_backward",  # Out of bounds: frame_state_entry.stride[i] is None
@@ -3849,7 +3904,16 @@ known_failing_tests = {
     "test_return_duplicate",  # gradient batching rule not implemented for aten::sym_size.int
     "test_return_duplicate_inplace",  # gradient batching rule not implemented for aten::sym_size.int
     "test_setitem",  # CopySlices accuracy error
-    # Category: Inductor
+    "test_save_on_cpu_and_checkpoint",  # https://github.com/pytorch/pytorch/issues/147565
+    "test_checkpoint_detects_non_determinism",  # different error
+    "test_checkpointing_non_reentrant_autocast_cpu",  # saved != recompute
+    "test_checkpointing_non_reentrant_autocast_gpu",  # saved != recompute
+    "test_checkpointing_without_reentrant_saved_object_identity",  # same as https://github.com/pytorch/pytorch/issues/136193
+    "test_saved_variable_packing_unpacking_did_not_save_original_with_hooks",  # register_hooks multiple times
+    "test_saved_variable_saved_original_inplace_detach",  # RuntimeError not raised
+    "test_access_saved_tensor_twice_without_recomputation_works",  # saved != recompute
+    "test_checkpointing_without_reentrant_dataparallel",  # https://github.com/pytorch/pytorch/issues/127115
+    # Category: Inductor (pass on backend="aot_eager")
     "test_input_buffer_accum",  # does not support sparse_grad=True: https://github.com/pytorch/pytorch/issues/120267
     "test_graph_save_on_cpu",  # does not support pin_memory: https://github.com/pytorch/pytorch/issues/134173
     # Category: FakeTensor
@@ -3861,6 +3925,7 @@ known_failing_tests = {
     "test_invalid_gradients",  # can't give autograd error due to inaccurate output metadata of lifted backward
     "test_autograd_node_isinstance",  # backward ctx is a fake cls and not directly a Node instance
     "test_backward_hook_relative_ordering",  # compiled autograd collects breadth first, and module backward hook not supported
+    "test_checkpointing_without_reentrant_custom_function_works",  # ctx.saved_tensors are cached by CA
     # Category: Subclasses
     "test_dtensor_basic",
     "test_dtensor_contiguous_dtensor_noncontiguous_local_as_tangent",
