@@ -338,6 +338,7 @@ class TestCutlassBackend(TestCase):
                 "max_autotune": True,
                 "autotune_in_subproc": True,
                 "max_autotune_gemm_backends": max_autotune_gemm_backends,
+                "autotune_local_cache": False,
                 "cuda.cutlass_max_profiling_configs": 1,
                 "autotune_fallback_to_aten": False,
                 "cuda.cutlass_max_profiling_swizzle_options": [
