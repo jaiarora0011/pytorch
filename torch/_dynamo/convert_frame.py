@@ -72,7 +72,7 @@ from torch.utils._python_dispatch import (
 )
 from torch.utils._traceback import CapturedTraceback, format_traceback_short
 
-from . import config, exc, trace_rules
+from . import config, exc, graph_break_hints, trace_rules
 from .bytecode_analysis import remove_dead_code, remove_pointless_jumps
 from .bytecode_transformation import (
     check_inst_exn_tab_entries_valid,
@@ -541,7 +541,8 @@ class ConvertFrameAssert:
                 explanation="Generators cannot be compiled directly with `torch.compile`.",
                 hints=[
                     "Wrap the generator in a non-generator function and compile the latter. "
-                    "Dynamo supports tracing functions that call a generator."
+                    "Dynamo supports tracing functions that call a generator.",
+                    *graph_break_hints.FUNDAMENTAL,
                 ],
             )
 
